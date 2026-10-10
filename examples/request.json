@@ -1,0 +1,11 @@
+{
+  "event_name": "Python Bootcamp 2026",
+  "title": "Certificate of Completion",
+  "issuer": "ACME Academy",
+  "issue_date": "2026-10-10",
+  "recipients": [
+    {"name": "Ada Lovelace", "email": "ada@example.com"},
+    {"name": "Grace Hopper", "email": "grace@example.com", "achievement": "has completed with distinction"},
+    {"name": "", "email": "this-row-is-invalid"}
+  ]
+}
