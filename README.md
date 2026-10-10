@@ -139,6 +139,100 @@ curl -OJ http://127.0.0.1:5000/api/jobs/<id>/download
 
 `GET /api/health` returns `{"status": "ok"}`.
 
+## Architecture
+
+### System overview
+
+```mermaid
+flowchart TB
+    Client(["Client (curl / frontend)"])
+
+    subgraph API["Flask app"]
+        Routes["routes.py - HTTP endpoints"]
+        Validation["validation.py - request and recipient checks"]
+        Service["service.py - create_job / process_job"]
+        Pool["Worker pool - ThreadPoolExecutor"]
+        Renderer["certificate.py - ReportLab PDF template"]
+    end
+
+    DB[("SQLite - jobs + certificates")]
+    Files[("PDF storage - instance/certificates")]
+
+    Client -->|"POST /api/jobs"| Routes
+    Routes -->|"validate"| Validation
+    Routes -->|"create job"| Service
+    Service -->|"save job + one row per recipient"| DB
+    Service -->|"submit job"| Pool
+    Pool -->|"render each PENDING row"| Renderer
+    Renderer -->|"write PDF"| Files
+    Pool -->|"update row status"| DB
+
+    Client -.->|"GET /api/jobs/id (poll progress)"| Routes
+    Routes -.->|"count rows by status"| DB
+    Client -.->|"GET download (PDF or ZIP)"| Routes
+    Routes -.->|"read PDFs"| Files
+```
+
+### Request lifecycle
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant A as API (routes)
+    participant D as SQLite
+    participant W as Worker thread
+    participant F as PDF storage
+
+    C->>A: POST /api/jobs (event + recipients)
+    A->>A: validate request (400 if invalid)
+    A->>D: insert job + one row per recipient (PENDING, or FAILED if invalid)
+    A-->>C: 202 Accepted + job id
+    A->>W: submit job to worker pool
+
+    loop each PENDING certificate
+        W->>F: render PDF (temp file, then rename)
+        alt success
+            W->>D: status = GENERATED
+        else error
+            W->>D: status = FAILED + error message
+        end
+    end
+    W->>D: job status = COMPLETED / COMPLETED_WITH_ERRORS / FAILED
+
+    C->>A: GET /api/jobs/{id}
+    A->>D: count rows by status
+    A-->>C: status + progress + failures
+    C->>A: GET /api/jobs/{id}/download
+    A->>F: read generated PDFs
+    A-->>C: ZIP of certificates
+```
+
+### Status flow
+
+Certificate (one per recipient):
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: valid recipient
+    [*] --> FAILED: invalid recipient
+    PENDING --> GENERATED: PDF written
+    PENDING --> FAILED: render error
+    GENERATED --> [*]
+    FAILED --> [*]
+```
+
+Job:
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: accepted
+    [*] --> FAILED: every recipient invalid
+    PENDING --> PROCESSING: worker starts
+    PROCESSING --> COMPLETED: all generated
+    PROCESSING --> COMPLETED_WITH_ERRORS: some failed
+    PROCESSING --> FAILED: none generated
+```
+
 ## Project layout
 
 ```
